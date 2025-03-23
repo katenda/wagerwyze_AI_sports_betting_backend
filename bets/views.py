@@ -75,6 +75,9 @@ from xgboost import XGBClassifier
 from tabulate import tabulate
 from pathlib import Path
 
+import matplotlib.pyplot as plt
+from bets.models import *
+
 
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -475,7 +478,100 @@ def create_prediction(home_team,away_team):
     result=test_model_on_teams(home_team, away_team,label_encoders,merged_df,scaler,xgb_model)
     print("My results: "+str(result))
 
-    return result
+    #get winner name
+    winner=''
+    loser=''
+
+    if 'Away' in result:
+        winner=away_team
+        loser=home_team
+
+    elif 'Home' in result:
+        winner=home_team
+        loser=away_team
+
+    result_1=winner+" Team Wins"
+
+    data={
+        'result':result_1,
+        'winner':winner,
+        'loser':loser
+    }
+
+    return data
+
+
+
+#get graph data
+def getgraph_data(team_one,team_two):
+    # Load the CSV file
+    file_path = BASE_DIR /'data/spreadspoke_scores.csv'
+    df = pd.read_csv(file_path)
+
+    # Display the first few rows to understand the structure
+    df.head()
+
+    # Extracting necessary columns
+    df = df[['schedule_season', 'team_home', 'score_home', 'team_away', 'score_away']]
+
+    # Filtering for Miami Dolphins and Philadelphia Eagles matches
+    teams = [team_one, team_two]
+    df_filtered = df[(df['team_home'].isin(teams)) | (df['team_away'].isin(teams))]
+
+    # Creating a dictionary to store wins per year
+    win_counts = {team: {} for team in teams}
+
+    # Counting wins per season
+    for _, row in df_filtered.iterrows():
+        season = int(row['schedule_season'])
+        home_team = row['team_home']
+        away_team = row['team_away']
+        home_score = row['score_home']
+        away_score = row['score_away']
+
+        if home_team in teams:
+            if season not in win_counts[home_team]:
+                win_counts[home_team][season] = 0
+            if home_score > away_score:
+                win_counts[home_team][season] += 1
+
+        if away_team in teams:
+            if season not in win_counts[away_team]:
+                win_counts[away_team][season] = 0
+            if away_score > home_score:
+                win_counts[away_team][season] += 1
+
+    # Converting the dictionary to a DataFrame
+    df_wins = pd.DataFrame(win_counts).fillna(0).astype(int).sort_index()
+
+    # Resampling data for every 10 years
+    df_wins_10yr = df_wins.groupby((df_wins.index // 5) * 5).sum()
+
+    # Display the data to the user before plotting
+
+    # Plotting the line graph
+    # plt.figure(figsize=(10, 5))
+    # plt.plot(df_wins_10yr.index, df_wins_10yr[team_one], marker='o', label=team_one)
+    # plt.plot(df_wins_10yr.index, df_wins_10yr[team_two], marker='s', label=team_two)
+
+    print(df_wins_10yr.index, df_wins_10yr[team_one])
+    print(df_wins_10yr.index, df_wins_10yr[team_two])
+
+    # Adding labels and title
+    # plt.xlabel("Decade")
+    # plt.ylabel("Total Wins")
+    # plt.title("Total Wins per Decade (1966-Present)")
+    # plt.legend()
+    # plt.grid(True)
+
+    # Display the plot
+    #plt.show()
+
+    # Extract separate lists
+    decades = df_wins_10yr.index.tolist()
+    team_one_wins = df_wins_10yr[team_one].tolist()
+    team_two_wins = df_wins_10yr[team_two].tolist()
+    return decades, team_one_wins, team_two_wins  # Returning separate lists
 
 
 
@@ -486,11 +582,48 @@ def make_prediction(request):
         home_team=request.POST.get('home_team')
         away_team=request.POST.get('away_team')
 
+        home_team_name=request.POST.get('home_team_name')
+        away_team_name=request.POST.get('away_team_name')
+        
+        client_id=request.POST.get('client_id')
+
         #get results
-        results=create_prediction(home_team,away_team)
+        results=create_prediction(home_team,away_team)['result']
+        winner=create_prediction(home_team,away_team)['winner']
+        loser=create_prediction(home_team,away_team)['loser']
+
+        #get graph data
+        #getgraph_data(home_team_name,away_team_name)
+        decades, team_one_wins, team_two_wins = getgraph_data(home_team_name,away_team_name)
+
+        graph={
+            'decades':decades,
+            'team_one_wins':team_one_wins,
+            'team_two_wins':team_two_wins,
+        }
+
+        #create history
+        cli_obj=Client.objects.filter(pk=int(client_id))[0]
+        mydate=time.strftime("%d/%m/%Y")
+
+        data_={
+            'client':cli_obj,
+            'home_team':home_team_name,
+            'away_team':away_team_name,
+            'winner':winner,
+            'date':mydate,
+        }
+        h_obj=Predictions(**data_)
+        h_obj.save()
+        
+        print("saved history")
+
     
         results={
             "message":results,
+            'winner':winner,
+            'loser':loser,
+            'graph':graph
         }
 
         return JsonResponse(results,content_type='application/json',safe=False, status=200)
@@ -499,3 +632,94 @@ def make_prediction(request):
 
 
 
+from django.contrib.auth.hashers import make_password
+from django.contrib.auth.hashers import check_password
+
+#make prediction
+@csrf_exempt
+def user_signup(request):
+    if request.method=="POST":
+        username=request.POST.get('username')
+        password=request.POST.get('password')
+        message=''
+
+        user_data={
+            'username':username,
+            'password':make_password(password)
+        }
+        #check if user exists
+        if Client.objects.filter(username=username):
+            message+="User Account already exists"
+        else:
+            #create user
+            user_obj=Client(**user_data)
+            user_obj.save()
+            message+="Account created successfully. Please login"
+
+        results={
+            "message":message,
+        }
+
+        return JsonResponse(results,content_type='application/json',safe=False, status=200)
+    
+    return JsonResponse({"message":"unsuccessfull"}, status=400)
+
+
+
+#make prediction
+@csrf_exempt
+def user_login(request):
+    if request.method=="POST":
+        username=request.POST.get('username')
+        password=request.POST.get('password')
+        
+        message=''
+        user_data={}
+
+        #check if user exists
+        if Client.objects.filter(username=username):
+            user_obj=Client.objects.filter(username=username)[0]
+            if check_password(password,user_obj.password):
+                message+="success"
+                #get data
+                user_data['username']=user_obj.username
+                user_data['pk']=user_obj.pk
+            else:
+                message+="UserPassword is wrong."
+        else:
+            #create user
+            message+="Account does not exist."
+
+        results={
+            "message":message,
+            'user_data':user_data
+        }
+
+        return JsonResponse(results,content_type='application/json',safe=False, status=200)
+    
+    return JsonResponse({"message":"unsuccessfull"}, status=400)
+
+
+# get teams.
+@csrf_exempt
+def get_predictions(request):
+    if request.method=="POST":
+        user_id=request.POST.get('user_id')
+        report=[]
+        #get user predictions
+        if Client.objects.filter(pk=int(user_id)):
+            cli_obj=Client.objects.filter(pk=int(user_id))[0]
+            if Predictions.objects.filter(client=cli_obj):
+                all_preds=Predictions.objects.filter(client=cli_obj)
+                for pr in all_preds:
+                    data={
+                        'id':pr.pk,
+                        'date':pr.date,
+                        'home_team':pr.home_team,
+                        'away_team':pr.away_team,
+                        'winner':pr.winner,
+                        'loser':pr.loser,
+                    }
+                    report.append(data)
+        return JsonResponse(report,content_type='application/json',safe=False, status=200)
+    return JsonResponse({"message":"unsuccessfull"}, status=400)
